@@ -136,7 +136,7 @@
 server_t server;
 list_t client_list;
 struct kevent events[MAX_EVENT_COUNT];
-struct timespec ts = {.tv_sec = 10, .tv_nsec = 0};
+// struct timespec ts = {.tv_sec = 10, .tv_nsec = 0};
 
 static void handle_signals(int sig) {
     (void) sig;
@@ -157,7 +157,7 @@ int init() {
 
     sigaction(SIGINT, &sa, NULL);
     sigaction(SIGTERM, &sa, NULL);
-    sigaction(SIGKILL, &sa, NULL);
+    // sigaction(SIGKILL, &sa, NULL);
     sigaction(SIGPIPE, &sa, NULL);
     
     // // Threadpool
@@ -244,8 +244,8 @@ void remove_client(int client_fd) {
     (void) client_fd;
     struct kevent ev[3];
     EV_SET(&ev[0], client_fd, EVFILT_READ, EV_DELETE, 0, 0, NULL);
-    EV_SET(&ev[0], client_fd, EVFILT_WRITE, EV_DELETE, 0, 0, NULL);
-    EV_SET(&ev[0], client_fd, EVFILT_TIMER, EV_DELETE, 0, 0, NULL);
+    EV_SET(&ev[1], client_fd, EVFILT_WRITE, EV_DELETE, 0, 0, NULL);
+    EV_SET(&ev[2], client_fd, EVFILT_TIMER, EV_DELETE, 0, 0, NULL);
     kevent(server.e_fd, ev, 3, NULL, 0, NULL);
     close(client_fd);
     delete(&client_list, client_fd);
@@ -268,7 +268,7 @@ void accept_client(listener_t ln, list_t* client_list) {
         // SOMETHING TO SEE HERE, temp_client, temp_client.sin_addr
         struct sockaddr_in *temp_client = (struct sockaddr_in*) &conn.addr;
         char clinet_ip[INET_ADDRSTRLEN];
-        inet_ntop(AF_INET, &temp_client, clinet_ip, INET_ADDRSTRLEN);
+        inet_ntop(AF_INET, &temp_client->sin_addr, clinet_ip, INET_ADDRSTRLEN);
 
         memcpy(&conn.c_addr.host, clinet_ip, sizeof(clinet_ip));
         conn.c_addr.host[sizeof(clinet_ip)] = '\0';
@@ -299,8 +299,9 @@ void accept_client(listener_t ln, list_t* client_list) {
             return;
         }
         client_t* temp = &node->client;
-        
-        EV_SET(&ev, conn.fd, EVFILT_TIMER, EV_ADD | EV_ENABLE, 0, 10000, temp);
+
+        uintptr_t timer_id = (uintptr_t) conn.fd;
+        EV_SET(&ev, timer_id, EVFILT_TIMER, EV_ADD | EV_ONESHOT, 0, 10000, temp);
         kevent(server.e_fd, &ev, 1, NULL, 0, NULL);
     }
 }
@@ -336,13 +337,19 @@ void read_from_client(int client_fd, list_t* client_list) {
         printf("[%d][%s:%d] Conn Recv: %s\n", conn->fd, conn->c_addr.host, conn->c_addr.port, conn->buf);
 
         // create a write event ....
-        struct kevent kv;
-        EV_SET(&kv, conn->fd, EVFILT_WRITE, EV_ADD|EV_ENABLE, 0, 0, conn);
-        kevent(server.e_fd, &kv, 1, NULL, 0, NULL);
+        struct kevent ev;
+        EV_SET(&ev, conn->fd, EVFILT_WRITE, EV_ADD|EV_ENABLE, 0, 0, conn);
+        kevent(server.e_fd, &ev, 1, NULL, 0, NULL);
 
+        // DELETE AND READD...
+
+        // delete
+        uintptr_t timer_id = (uintptr_t) conn->fd;
+        EV_SET(&ev, timer_id, EVFILT_TIMER, EV_DELETE, 0, 0, NULL);
+        kevent(server.e_fd, &ev, 1, NULL, 0, NULL);
         // re timer
-        EV_SET(&kv, conn->fd, EVFILT_TIMER, EV_ADD | EV_ENABLE, 0, 10000, conn);
-        kevent(server.e_fd, &kv, 1, NULL, 0, NULL);
+        EV_SET(&ev, timer_id, EVFILT_TIMER, EV_ADD | EV_ENABLE | EV_ONESHOT, 0, 10000, conn);
+        kevent(server.e_fd, &ev, 1, NULL, 0, NULL);
     }
 }
 
@@ -372,13 +379,19 @@ void write_to_client(int client_fd, list_t* client_list, client_t* client) {
     }
     
     // delete the write event...
-    struct kevent kv;
-    EV_SET(&kv, client->fd, EVFILT_WRITE, EV_DELETE, 0, 0, NULL);
-    kevent(server.e_fd, &kv, 1, NULL, 0, NULL);
+    struct kevent ev;
+    EV_SET(&ev, client->fd, EVFILT_WRITE, EV_DELETE, 0, 0, NULL);
+    kevent(server.e_fd, &ev, 1, NULL, 0, NULL);
 
+    // DELETE AND READD...
+
+    // delete
+    uintptr_t timer_id = (uintptr_t) client->fd;
+    EV_SET(&ev, timer_id, EVFILT_TIMER, EV_DELETE, 0, 0, NULL);
+    kevent(server.e_fd, &ev, 1, NULL, 0, NULL);
     // re timer
-    EV_SET(&kv, client->fd, EVFILT_TIMER, EV_ADD | EV_ENABLE, 0, 10000, client);
-    kevent(server.e_fd, &kv, 1, NULL, 0, NULL);
+    EV_SET(&ev, timer_id, EVFILT_TIMER, EV_ADD | EV_ENABLE | EV_ONESHOT, 0, 10000, client);
+    kevent(server.e_fd, &ev, 1, NULL, 0, NULL);
 }
 
 void handle_client_timeout(int client_fd, list_t* client_list, client_t* client) {
@@ -392,11 +405,13 @@ void handle_client_timeout(int client_fd, list_t* client_list, client_t* client)
 }
 
 int main() {
-
+    printf("Initializeing.....\n");
     init();
+    sleep(10);
+    printf("Client can connect now\n");
 
     while (server.shutdown_signal == false) {
-        int n = kevent(server.e_fd, NULL, 0, events, MAX_EVENT_COUNT, &ts);
+        int n = kevent(server.e_fd, NULL, 0, events, MAX_EVENT_COUNT, NULL);
 
         for (int i = 0; i < n; i++) {
             struct kevent* e = &events[i];
@@ -405,6 +420,9 @@ int main() {
             if (e->filter == EVFILT_READ) {
                 if (e->flags & EV_EOF) {
                     // close conn
+                    // printf("[%d] ERROR\n", efd);
+                    // perror("ERROR---FD: ");
+                    printf("[%d] peer closed connection\n", efd);
                     remove_client(efd);
                     continue;
                 }

@@ -11,6 +11,7 @@ client_t s_accept(listener_t ln) {
     // printf("Listening...\n");
     conn.fd = accept(ln.fd, (struct sockaddr*) &conn.addr, &len);
     if (conn.fd < 0) {
+        // perror("S_ACCEPT(): ");
         conn.err = 1;
         return conn;
     }
