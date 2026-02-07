@@ -170,8 +170,8 @@ void destroy_pool(thread_pool_t* pool, int threadCount) {
     printf("[info] Threadpool is destrooyed\n");
 }
 
-bool push_task(thread_pool_t* pool, void (* func) (void* args), void* arg) {
-    if (pool == NULL || func == NULL || arg == NULL) {
+bool push_task(thread_pool_t* pool, func fn, void* arg) {
+    if (pool == NULL || fn == NULL || arg == NULL) {
         return false;
     }
 
@@ -179,7 +179,7 @@ bool push_task(thread_pool_t* pool, void (* func) (void* args), void* arg) {
     if (pool->shutdown) goto NO_NEW_TASK;
 
     task_node_t node = {
-        .func = func,
+        .func = fn,
         .args = (void*) arg
     };
 

@@ -86,6 +86,8 @@ typedef struct {
     addr_t c_addr;
     int err;
     char buf[216];
+    uintptr_t timer_id;
+    time_t last_active;
 } client_t;
 
 typedef struct Server {

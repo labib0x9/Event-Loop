@@ -45,13 +45,6 @@ int init() {
     sigaction(SIGINT, &sa, NULL);
     sigaction(SIGTERM, &sa, NULL);
     sigaction(SIGPIPE, &sa, NULL);
-    
-    // Threadpool
-    thread_pool_t* pool = create_pool(QUEUE_SIZE);
-    if (pool == NULL) {
-        perror("Pool");
-        return 0;
-    }
 
     // event queue fd
     int e_fd = kqueue();
@@ -104,13 +97,11 @@ int init() {
 
     printf("[info] EL= %d, Sock=%d\n", e_fd, ln.fd);
 
-    // server config
-        server.e_fd = e_fd;
-        server.ln = ln;
-        server.pool = pool;
-        server.recv_timeout = 10;
-        server.send_timeout = 10;
-        server.shutdown_signal = false;
+    server.e_fd = e_fd;
+    server.ln = ln;
+    server.recv_timeout = 10;
+    server.send_timeout = 10;
+    server.shutdown_signal = false;
 
     return 1;
 }
@@ -122,20 +113,14 @@ void remove_client(int client_fd, char* funcc) {
     (void) client_fd;
     (void) funcc;
 
-    printf("[%d][%s] REMOVE_CLIENT FD::)\n", client_fd, funcc);
-
     struct kevent ev[3];
     l_node_t* node = search(&client_list, client_fd);
     if (node == NULL) {
         printf("FD=%d No client found\n", client_fd);
-        // if (client_fd >= (((uintptr_t)1 << 32) | 0)) {
-        //     EV_SET(&ev[2], client_fd, EVFILT_TIMER, EV_DELETE, 0, 0, NULL);
-        //     kevent(server.e_fd, ev, 1, NULL, 0, NULL);
-        // }
         return;
     }
     client_t* temp = &node->client;
-    printf("[%d][%lu][%s] REMOVE_CLIENT FD::)\n", client_fd, temp->timer_id, funcc);
+    uintptr_t timer_id = temp->timer_id;
 
     EV_SET(&ev[0], client_fd, EVFILT_READ, EV_DELETE, 0, 0, NULL);
     EV_SET(&ev[1], client_fd, EVFILT_WRITE, EV_DELETE, 0, 0, NULL);
@@ -143,7 +128,9 @@ void remove_client(int client_fd, char* funcc) {
     kevent(server.e_fd, ev, 3, NULL, 0, NULL);
     close(client_fd);
     delete(&client_list, client_fd);
-    // printf("[%d] DISCONNECT\n", client_fd);
+
+    printf("[%d][%lu][%s] REMOVE_CLIENT FD::)\n", client_fd, timer_id, funcc);
+
 }
 
 void accept_client(listener_t ln, list_t* client_list) {
@@ -153,7 +140,6 @@ void accept_client(listener_t ln, list_t* client_list) {
 
         if (conn.err != 0) {
             conn_close(conn);
-            // perror("s_accept()");
             break;
         }
 
@@ -172,7 +158,6 @@ void accept_client(listener_t ln, list_t* client_list) {
             continue;
         };
 
-        // conn.timer_id = ((uintptr_t)conn.fd << 32) | (++timer_counter);
         conn.timer_id = ++timer_counter;
         conn.last_active = time(NULL);
 
@@ -192,7 +177,7 @@ void accept_client(listener_t ln, list_t* client_list) {
         EV_SET(&ev, conn.fd, EVFILT_TIMER, EV_ADD | EV_ENABLE, 10000, 0, NULL);
         l_node_t* node = search(client_list, conn.fd);
         if (node == NULL) {
-            // printf("No client found\n");
+            printf("No client found\n");
             break;;
         }
         client_t* temp = &node->client;
@@ -200,13 +185,12 @@ void accept_client(listener_t ln, list_t* client_list) {
         EV_SET(&ev, conn.timer_id, EVFILT_TIMER, EV_ADD | EV_ONESHOT, 0, 10000, temp);
         kevent(server.e_fd, &ev, 1, NULL, 0, NULL);
     }
-    // printf("DONE ACCEPTING CLIENT\n");
 }
 
 void read_from_client(int client_fd, list_t* client_list) {
     l_node_t* node = search(client_list, client_fd);
     if (node == NULL) {
-        // printf("No client found\n");
+        printf("No client found\n");
         return;
     }
     client_t* conn = &node->client;
@@ -225,19 +209,18 @@ void read_from_client(int client_fd, list_t* client_list) {
         // client disconnected........
         if (n == 0) {
             // close the fd, and remove event from the event queue...
-            // printf("[FD=%d] Disconnected\n", conn->fd);
-            // close(conn->fd);
+            printf("[FD=%d] Disconnected\n", conn->fd);
             remove_client(conn->fd, "read_from_client()");
             break;
         }
         conn->buf[n] = '\0';
-        // printf("[%d][%s:%d] Conn Recv: %s\n", conn->fd, conn->c_addr.host, conn->c_addr.port, conn->buf);
+        printf("[%d][%s:%d] Conn Recv: %s\n", conn->fd, conn->c_addr.host, conn->c_addr.port, conn->buf);
 
         conn->last_active = time(NULL);
 
         // create a write event ....
         struct kevent ev;
-        EV_SET(&ev, conn->fd, EVFILT_WRITE, EV_ADD | EV_ENABLE, 0, 0, conn);
+        EV_SET(&ev, conn->fd, EVFILT_WRITE, EV_ADD|EV_ENABLE, 0, 0, conn);
         kevent(server.e_fd, &ev, 1, NULL, 0, NULL);
 
         // DELETE AND READD...
@@ -258,14 +241,14 @@ void write_to_client(int client_fd, list_t* client_list, client_t* client) {
 
     if (strlen(client->buf) == 0) {
         // nothing to write
-        // printf("ZERO LEN\n");
+        printf("ZERO LEN\n");
         return;
     }
 
     int n = send(client->fd, client->buf, strlen(client->buf), 0);
     if (n == (int) strlen(client->buf)) {
-        // printf("[%d][%s:%d] All bytes are written\n", client->fd, client->c_addr.host, client->c_addr.port);
-        // printf("[%d][%s:%d] msg= %s\n", client->fd, client->c_addr.host, client->c_addr.port, client->buf);
+        printf("[%d][%s:%d] All bytes are written\n", client->fd, client->c_addr.host, client->c_addr.port);
+        printf("[%d][%s:%d] msg= %s\n", client->fd, client->c_addr.host, client->c_addr.port, client->buf);
     }
 
     client->last_active = time(NULL);
@@ -300,35 +283,25 @@ void handle_client_timeout(int ident, list_t* client_list, client_t* client) {
 
     char buf[] = "TIMEOUT\n";
     send(client->fd, buf, sizeof(buf), 0);
-    // printf("[%d][%s:%d] TiMeOuT hIt\n", client->fd, client->c_addr.host, client->c_addr.port);
+
+    printf("[%d][%s:%d] TiMeOuT hIt\n", client->fd, client->c_addr.host, client->c_addr.port);
+    
     remove_client(client->fd, "handle_client_timeout()");
 }
 
 int main() {
     printf("Initializeing.....\n");
     init();
-    sleep(10);
     printf("Client can connect now\n");
-
-    // -1, -2, -7
-    printf("READ=%d | WRITE=%d | TIMER=%d\n", EVFILT_READ, EVFILT_WRITE, EVFILT_TIMER);
 
     while (server.shutdown_signal == false) {
         int n = kevent(server.e_fd, NULL, 0, events, MAX_EVENT_COUNT, NULL);
-
         for (int i = 0; i < n; i++) {
-
             struct kevent* e = &events[i];
             int efd = e->ident;
-
-
-            printf("ident= %lu | filter= %d\n", e->ident, e->filter);
-
-
-
             if (e->filter == EVFILT_READ) {
                 if (e->flags & EV_EOF) {
-                    // printf("[%d] peer closed connection\n", efd);
+                    printf("[%d] peer closed connection\n", efd);
                     remove_client(efd, "EV_EOF()");
                     continue;
                 }
@@ -343,31 +316,15 @@ int main() {
                 // write to client
                 write_to_client(efd, &client_list, e->udata);
             } else if (e->filter == EVFILT_TIMER) {
-                // client timeout
-                // client_t* client = e->udata;
-                // printf("timEOut= %lu\n", e->ident);
-                // if (client == NULL) {
-                //     continue;
-                //     // ((client_t*) e->udata)->fd
-                // }
-                // if (client != NULL) {
-                //     printf("FD: %d\n", client->fd);
-                // }
-                // if (client->fd == 0) {
-                //     struct kevent ev;
-                //     EV_SET(&ev, e->ident, EVFILT_TIMER, EV_DELETE, 0, 0, NULL);
-                //     kevent(server.e_fd, &ev, 1, NULL, 0, NULL);
-                //     continue;
-                // }
                 handle_client_timeout(efd, &client_list, e->udata);
             } else {
-                // printf("UNKNOWN-FILTER: %d\n", (int)e->filter);
+                printf("UNKNOWN-FILTER: %d\n", (int)e->filter);
             }
         }
     }
 
-    // clean ups
-    destroy_pool(server.pool, MAX_THREAD_COUNT);
+    printf("Shutting Down Server\n");
+    
     free_list(&client_list);
     close(server.e_fd);
     close(server.ln.fd);
